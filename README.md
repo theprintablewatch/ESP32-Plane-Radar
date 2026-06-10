@@ -1,5 +1,9 @@
 # Plane Radar
 
+<p align="center">
+  <img src="assets/demo.gif" alt="Plane Radar demo" width="320">
+</p>
+
 **3D printed case (STL + assembly):** [MakerWorld](https://makerworld.com/en/models/2913572-esp32-s3-1-28-waveshare-plane-radar#profileId-3258909). **Firmware:** [Releases](https://github.com/theprintablewatch/ESP32-Plane-Radar/releases)
 
 Firmware for the **Waveshare ESP32-S3 Touch LCD 1.28** (round GC9A01 display, 240×240). Shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
