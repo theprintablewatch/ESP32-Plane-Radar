@@ -2,21 +2,35 @@
 
 #include "hardware/display.h"
 
+// The embedded VLW differs per board (see board_build.embed_files): the 4.3B
+// uses a larger native master so text stays crisp on the 800x480 panel.
+#if defined(BOARD_WAVESHARE_43B)
+extern "C" {
+extern const uint8_t _binary_data_ui_font_43b_vlw_start[] asm(
+    "_binary_data_ui_font_43b_vlw_start");
+extern const uint8_t _binary_data_ui_font_43b_vlw_end[] asm(
+    "_binary_data_ui_font_43b_vlw_end");
+}
+#define UI_FONT_VLW_START _binary_data_ui_font_43b_vlw_start
+#define UI_FONT_VLW_END _binary_data_ui_font_43b_vlw_end
+#else
 extern "C" {
 extern const uint8_t _binary_data_ui_font_vlw_start[] asm(
     "_binary_data_ui_font_vlw_start");
 extern const uint8_t _binary_data_ui_font_vlw_end[] asm("_binary_data_ui_font_vlw_end");
 }
+#define UI_FONT_VLW_START _binary_data_ui_font_vlw_start
+#define UI_FONT_VLW_END _binary_data_ui_font_vlw_end
+#endif
 
 namespace {
 
 bool s_vlw_loaded = false;
 
-const uint8_t* vlwData() { return _binary_data_ui_font_vlw_start; }
+const uint8_t* vlwData() { return UI_FONT_VLW_START; }
 
 size_t vlwDataLen() {
-  return static_cast<size_t>(_binary_data_ui_font_vlw_end -
-                               _binary_data_ui_font_vlw_start);
+  return static_cast<size_t>(UI_FONT_VLW_END - UI_FONT_VLW_START);
 }
 
 bool vlwActiveOn(const lgfx::LGFXBase& gfx) {

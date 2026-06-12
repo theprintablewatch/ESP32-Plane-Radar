@@ -11,6 +11,7 @@
 #include "config.h"
 #include "services/radar_location.h"
 #include "services/radar_rotation.h"
+#include "services/sat_client.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
 
@@ -107,6 +108,19 @@ void handleRoot() {
                 "<label><input type=\"checkbox\" name=\"miles\" value=\"T\"" + String(ui::radar::useMiles() ? " checked" : "") + "> Display distances in miles</label><br><br>"
                 "<label>Top Bearing (degrees) Hint use your phone compass:</label><br>"
                 "<input type=\"number\" step=\"1\" name=\"top_bearing\" value=\"" + String(services::radar_rotation::topHeading(), 0) + "\"><br><br>"
+                "<label>N2YO API Key (satellite radar &mdash; swipe to switch):</label><br>"
+                "<input type=\"text\" name=\"n2yo_key\" placeholder=\"from n2yo.com/api\" value=\"" + String(services::sat::apiKey()) + "\"><br><br>"
+                "<label>Satellite category:</label><br>"
+                "<select name=\"sat_cat\">";
+
+  for (size_t i = 0; i < config::kSatCategoryCount; ++i) {
+    const config::SatCategory& cat = config::kSatCategories[i];
+    const bool selected = (cat.id == services::sat::category());
+    html += "<option value=\"" + String(cat.id) + "\"" +
+            (selected ? " selected" : "") + ">" + String(cat.name) + "</option>";
+  }
+
+  html +=       "</select><br><br>"
                 "<label>Range:</label><br>"
                 "<select name=\"range\">";
 
@@ -146,6 +160,15 @@ void handleSave() {
 
   services::location::saveFromStrings(lat.c_str(), lon.c_str());
   ui::radar::saveMilesFromPortal(miles == "T" ? "T" : "F");
+
+  String n2yo_key = s_server.arg("n2yo_key");
+  n2yo_key.trim();
+  services::sat::saveApiKey(n2yo_key.c_str());
+
+  String sat_cat = s_server.arg("sat_cat");
+  if (sat_cat.length() > 0) {
+    services::sat::saveCategory(sat_cat.toInt());
+  }
 
   if (top_bearing_str.length() > 0) {
     services::radar_rotation::setTopHeading(top_bearing_str.toFloat());

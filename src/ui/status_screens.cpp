@@ -233,6 +233,17 @@ void statusScreenConnectFailed() {
                 sizeof(lines) / sizeof(lines[0]));
 }
 
+void statusScreenIp(const char* ip) {
+  const char* addr = (ip != nullptr && ip[0] != '\0') ? ip : "unknown";
+  const TextLine lines[] = {
+      {"IP address", 0.85f, &kGfxBody},
+      {addr, 1.0f, &kConnectingGfxDetail},
+      {config::kPortalHostUrl, 0.8f, &kConnectingGfxDetail},
+  };
+  drawTextBlock(config::kColorBlack, config::kTextOnBlack, lines,
+                sizeof(lines) / sizeof(lines[0]));
+}
+
 void statusScreenWifiReset() {
   const TextLine lines[] = {
       {"Wi-Fi reset", 1.15f, &kPortalGfxTitle},

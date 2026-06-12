@@ -14,6 +14,9 @@
 #include "services/radar_rotation.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
+#if defined(BOARD_WAVESHARE_43B)
+#include "ui/detection_list.h"
+#endif
 
 namespace fonts = lgfx::v1::fonts;
 
@@ -430,19 +433,25 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
 
   const int symbol_half =
       radar::kAircraftNoseLenPx + radar::kAircraftTailHalfPx;
+  // Keep tags within the radar circle's bounding box (not the full surface),
+  // so on the 4.3B they don't spill into the detection-list panel.
+  const int radar_left = radar::kCenterX - radar::kGridOuterRadius;
+  const int radar_right = radar::kCenterX + radar::kGridOuterRadius;
+  const int radar_top = radar::kCenterY - radar::kGridOuterRadius;
+  const int radar_bottom = radar::kCenterY + radar::kGridOuterRadius;
   // West (left): tag toward center on the right; east (right): tag on the left.
   const bool tag_on_right = x < radar::kCenterX;
   int anchor_x = 0;
   if (tag_on_right) {
     anchor_x = x + symbol_half + radar::kAircraftLabelGapPx;
-    anchor_x = std::min(anchor_x, radar::kSize - block_w - 1);
+    anchor_x = std::min(anchor_x, radar_right - block_w);
     tft.setTextDatum(textdatum_t::top_left);
   } else {
     anchor_x = x - symbol_half - radar::kAircraftLabelGapPx;
-    anchor_x = std::max(anchor_x, block_w + 1);
+    anchor_x = std::max(anchor_x, radar_left + block_w);
     tft.setTextDatum(textdatum_t::top_right);
   }
-  ly = std::max(1, std::min(ly, radar::kSize - block_h - 1));
+  ly = std::max(radar_top, std::min(ly, radar_bottom - block_h));
 
   if (plane.callsign[0] != '\0') {
     tft.setTextColor(radar::kColorLabel, radar::kColorBackground);
@@ -701,13 +710,19 @@ void drawStaticGrid(Gfx& gfx) {
   drawAirports();
   drawCardinalLabels();
   drawScaleLabel(cx, cy, grid_r);
+#if defined(BOARD_WAVESHARE_43B)
+  detectionListDrawStatic(gfx);
+#endif
   gfx.setTextDatum(textdatum_t::top_left);
 }
 
 bool rebuildBackgroundSprite() {
   if (!s_bg_ready) {
     s_bg.setColorDepth(16);
-    if (!s_bg.createSprite(radar::kSize, radar::kSize)) {
+#if defined(BOARD_WAVESHARE_43B)
+    s_bg.setPsram(true);  // 800x480x2 (~768KB) won't fit internal RAM
+#endif
+    if (!s_bg.createSprite(radar::kSpriteW, radar::kSpriteH)) {
       Serial.println("radar: background sprite alloc failed");
       return false;
     }
@@ -724,6 +739,9 @@ void blitBackgroundAndAircraft() {
     s_bg.pushSprite(0, 0);
   }
   drawAircraft();
+#if defined(BOARD_WAVESHARE_43B)
+  detectionListDraw();
+#endif
   tft.endWrite();
   tft.setTextDatum(textdatum_t::top_left);
 }
@@ -743,6 +761,9 @@ void radarDisplayDraw() {
   initLabelMetrics();
   drawStaticGrid(tft);
   drawAircraft();
+#if defined(BOARD_WAVESHARE_43B)
+  detectionListDraw();
+#endif
   tft.setTextDatum(textdatum_t::top_left);
 }
 

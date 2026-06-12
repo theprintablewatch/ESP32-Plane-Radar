@@ -10,47 +10,95 @@
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
 #include "services/radar_rotation.h"
+#include "services/sat_client.h"
+#include "services/touch_input.h"
 #include "services/web_settings.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
+#include "ui/sat_display.h"
 #include "ui/status_screens.h"
 
 namespace {
 
-bool g_radar_visible = false;
+// A tap cycles through these views in order; each stays until the next tap.
+enum class View { Planes, Satellites, Ip };
+View g_view = View::Planes;
+
+bool g_view_drawn = false;  // current view has been rendered at least once
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
+unsigned long g_last_sat_fetch_ms = 0;
 
-// --- Touch & IP Display State ---
-constexpr gpio_num_t kTouchIntPin = GPIO_NUM_5;
-constexpr gpio_num_t kTouchRstPin = GPIO_NUM_13;
-volatile bool s_touch_tap_pending = false;
-unsigned long g_ip_display_until_ms = 0;
 String g_local_ip_str;
 
-void IRAM_ATTR onTouchIsr() {
-  s_touch_tap_pending = true;
+#if defined(BOARD_WAVESHARE_43B)
+
+// 4.3B: GT911 is driven by LovyanGFX; report a tap on the press edge. No swipe
+// gestures here — the satellite radar targets the round touch display.
+bool s_touch_was_down = false;
+
+void touchInit() {}  // GT911 configured in the LGFX panel
+
+services::touch::Gesture pollTouchGesture() {
+  int32_t x = 0;
+  int32_t y = 0;
+  const bool down = tft.getTouch(&x, &y);
+  services::touch::Gesture g = services::touch::Gesture::None;
+  if (down && !s_touch_was_down) {
+    g = services::touch::Gesture::Tap;
+  }
+  s_touch_was_down = down;
+  return g;
 }
 
-void touchInit() {
-  pinMode(kTouchRstPin, OUTPUT);
-  digitalWrite(kTouchRstPin, LOW);
-  delay(10);
-  digitalWrite(kTouchRstPin, HIGH);
-  delay(50);
-  pinMode(kTouchIntPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(kTouchIntPin), onTouchIsr, FALLING);
-}
+#else
 
-void showRadarIfConnected() {
+// Round display: CST816S capacitive touch over I2C reports taps and swipes.
+void touchInit() { services::touch::init(); }
+
+services::touch::Gesture pollTouchGesture() { return services::touch::poll(); }
+
+#endif
+
+void drawCurrentView() {
   if (WiFi.status() != WL_CONNECTED) {
-    g_radar_visible = false;
+    g_view_drawn = false;
     return;
   }
-  ui::radarDisplayDraw();
-  g_radar_visible = true;
+  switch (g_view) {
+    case View::Planes:
+      ui::radarDisplayDraw();
+      break;
+    case View::Satellites:
+      ui::satDisplayDraw();
+      break;
+    case View::Ip:
+      g_local_ip_str = WiFi.localIP().toString();
+      statusScreenIp(g_local_ip_str.c_str());
+      break;
+  }
+  g_view_drawn = true;
+}
+
+const char* viewName(View v) {
+  switch (v) {
+    case View::Planes: return "planes";
+    case View::Satellites: return "satellites";
+    case View::Ip: return "ip";
+  }
+  return "?";
+}
+
+// Tap advances Planes -> Satellites -> Ip -> Planes; view holds until next tap.
+void advanceView() {
+  g_view = static_cast<View>((static_cast<int>(g_view) + 1) % 3);
+  Serial.printf("View: %s\n", viewName(g_view));
+  // Force an immediate fetch for the newly shown radar.
+  g_last_adsb_fetch_ms = 0;
+  g_last_sat_fetch_ms = 0;
+  drawCurrentView();
 }
 
 void onRangeTap() {
@@ -60,7 +108,7 @@ void onRangeTap() {
   Serial.printf("Range: %s (outer ~%.0f km)\n", range_label,
                 ui::radar::rangeCurrent().outer_km);
 
-  if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
+  if (g_view_drawn && WiFi.status() == WL_CONNECTED && g_view == View::Planes) {
     ui::radarDisplayDraw();
   }
 }
@@ -83,6 +131,19 @@ void fetchAndDrawAircraft() {
   handleBootButton();
 }
 
+void fetchAndDrawSatellites() {
+  if (!services::sat::hasApiKey()) {
+    ui::satDisplayShowNoKey();
+    handleBootButton();
+    return;
+  }
+  if (services::sat::fetchUpdate(services::location::lat(),
+                                 services::location::lon())) {
+    ui::satDisplayRefresh();
+  }
+  handleBootButton();
+}
+
 }  // namespace
 
 void setup() {
@@ -91,9 +152,12 @@ void setup() {
   Serial.println();
   Serial.println("Plane Radar");
 
-  // Enable backlight for Waveshare ESP32-S3 Touch LCD 1.28
+#if !defined(BOARD_WAVESHARE_43B)
+  // Round display: enable backlight GPIO. On the 4.3B the backlight is on the
+  // CH422G expander and is enabled inside displayInit().
   pinMode(config::kDisplayPinBl, OUTPUT);
   digitalWrite(config::kDisplayPinBl, HIGH);
+#endif
 
   bootButtonInit();
   displayInit();
@@ -103,44 +167,36 @@ void setup() {
   }
   services::location::init();
   services::radar_rotation::init();
+  services::sat::init();
   ui::radar::rangeInit();
 
   if (wifiSetupConnect()) {
     services::web_settings::init();
-    showRadarIfConnected();
+    drawCurrentView();
   }
 }
 
 void loop() {
-  if (s_touch_tap_pending) {
-    s_touch_tap_pending = false;
-    // Only trigger if radar is running and IP isn't already showing
-    if (WiFi.status() == WL_CONNECTED && g_ip_display_until_ms == 0) {
-      g_local_ip_str = "IP: " + WiFi.localIP().toString();
-      g_ip_display_until_ms = millis() + 5000;
-      g_radar_visible = false;
-      statusScreenConnectingBegin(g_local_ip_str.c_str());
+  // A tap (or a swipe) advances to the next view. One physical gesture can emit
+  // several events, so debounce: ignore further advances for a short window.
+  const services::touch::Gesture gesture = pollTouchGesture();
+  const bool advance = gesture == services::touch::Gesture::Tap ||
+                       gesture == services::touch::Gesture::SwipeLeft ||
+                       gesture == services::touch::Gesture::SwipeRight;
+  if (advance) {
+    static unsigned long s_last_advance_ms = 0;
+    if (WiFi.status() == WL_CONNECTED && millis() - s_last_advance_ms > 800) {
+      s_last_advance_ms = millis();
+      advanceView();
     }
-  }
-
-  if (g_ip_display_until_ms > 0) {
-    if (millis() >= g_ip_display_until_ms) {
-      g_ip_display_until_ms = 0;
-      if (WiFi.status() == WL_CONNECTED) {
-        showRadarIfConnected(); // 5 seconds passed, redraw radar
-      }
-    }
-    services::web_settings::handle(); // Keep background web server alive
-    delay(10);
-    return; // Suspend normal radar UI updates
   }
 
   handleBootButton();
 
   if (WiFi.status() != WL_CONNECTED) {
-    if (g_radar_visible) {
+    if (g_view_drawn) {
       Serial.println("WiFi lost — will reconnect");
-      g_radar_visible = false;
+      g_view_drawn = false;
     }
 
     if (g_wifi_down_since == 0) {
@@ -153,18 +209,26 @@ void loop() {
       g_last_reconnect_ms = millis();
       if (wifiReconnect()) {
         g_wifi_down_since = 0;
-        showRadarIfConnected();
+        drawCurrentView();
       }
     }
   } else {
     g_wifi_down_since = 0;
     services::web_settings::handle();
-    if (!g_radar_visible) {
-      showRadarIfConnected();
-    } else if (millis() - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
-      g_last_adsb_fetch_ms = millis();
-      fetchAndDrawAircraft();
+    if (!g_view_drawn) {
+      drawCurrentView();
+    } else if (g_view == View::Planes) {
+      if (millis() - g_last_adsb_fetch_ms >= config::kAdsbFetchIntervalMs) {
+        g_last_adsb_fetch_ms = millis();
+        fetchAndDrawAircraft();
+      }
+    } else if (g_view == View::Satellites) {
+      if (millis() - g_last_sat_fetch_ms >= config::kSatFetchIntervalMs) {
+        g_last_sat_fetch_ms = millis();
+        fetchAndDrawSatellites();
+      }
     }
+    // View::Ip is static — nothing to refresh.
   }
 
   delay(10);

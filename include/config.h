@@ -29,6 +29,37 @@ constexpr unsigned long kBootResetHoldMs = 3000UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
 
+#if defined(BOARD_WAVESHARE_43B)
+
+// --- Display: Waveshare ESP32-S3-Touch-LCD-4.3B (800×480 RGB parallel) ---
+// Bus/panel pins live in hardware/lgfx_config.hpp (driven by LovyanGFX).
+// Backlight + LCD/touch reset are on the CH422G IO expander, not GPIO.
+constexpr int kDisplayWidth = 800;
+constexpr int kDisplayHeight = 480;
+
+// GT911 capacitive touch (I2C, shared bus with the CH422G expander).
+constexpr int kTouchI2cPort = 1;
+constexpr gpio_num_t kTouchPinSda = GPIO_NUM_8;
+constexpr gpio_num_t kTouchPinScl = GPIO_NUM_9;
+constexpr gpio_num_t kTouchPinInt = GPIO_NUM_4;
+constexpr uint8_t kTouchI2cAddr = 0x14;  // GT911; try 0x5D if touch is dead
+constexpr uint32_t kTouchI2cHz = 400000;
+
+// CH422G IO expander: register-style I2C addresses + EXIO output bit map.
+// NOTE: the EXIO bit assignments are the most likely thing to need a hardware
+// tweak — they come from the Waveshare 4.3B reference, not measured here.
+constexpr uint8_t kCh422gAddrMode = 0x24;  // mode register (0x01 = push-pull out)
+constexpr uint8_t kCh422gAddrOut = 0x38;   // output register
+constexpr uint8_t kCh422gBitTouchRst = 0x01;  // EXIO1 -> TP_RST
+constexpr uint8_t kCh422gBitBacklight = 0x04;  // EXIO3 -> LCD backlight
+constexpr uint8_t kCh422gBitLcdRst = 0x08;     // EXIO4 -> LCD_RST
+
+// GC9A01-only flags kept defined so shared UI code compiles unchanged.
+constexpr bool kDisplayInvert = false;
+constexpr bool kDisplayRgbOrder = false;  // RGB panel, no R/B swap
+
+#else
+
 // --- Display: GC9A01 1.28" round 240×240 (SPI) ---
 constexpr gpio_num_t kDisplayPinRst = GPIO_NUM_14;
 constexpr gpio_num_t kDisplayPinCs = GPIO_NUM_9;
@@ -45,6 +76,17 @@ constexpr uint32_t kDisplaySpiWriteHz = 40000000;
 constexpr bool kDisplayInvert = true;
 constexpr bool kDisplayRgbOrder = true;
 
+// CST816S capacitive touch (Waveshare ESP32-S3-Touch-LCD-1.28).
+// Swipe left/right switches between the plane and satellite radars.
+constexpr gpio_num_t kTouchPinSda = GPIO_NUM_6;
+constexpr gpio_num_t kTouchPinScl = GPIO_NUM_7;
+constexpr gpio_num_t kTouchPinInt = GPIO_NUM_5;
+constexpr gpio_num_t kTouchPinRst = GPIO_NUM_13;
+constexpr uint8_t kTouchI2cAddr = 0x15;
+constexpr uint32_t kTouchI2cHz = 400000;
+
+#endif
+
 // --- Radar center defaults (overridden via WiFi setup portal) ---
 constexpr double kDefaultRadarLat = 52.3676;
 constexpr double kDefaultRadarLon = 4.9041;
@@ -55,6 +97,44 @@ constexpr unsigned long kAdsbFetchIntervalMs = 3000;
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+// --- Satellites (N2YO "above" API; swipe left/right to reach this radar) ---
+/** Free N2YO API key (register at https://www.n2yo.com/api/). Empty = set it
+ *  later from the WiFi setup portal; the satellite radar prompts until it is. */
+constexpr char kN2yoDefaultApiKey[] = "";
+/** Poll N2YO at most this often while the satellite radar is showing. */
+constexpr unsigned long kSatFetchIntervalMs = 15000;
+/** Sky-cone half-angle from the zenith to search (degrees, 0-90). */
+constexpr int kSatSearchRadiusDeg = 70;
+/** Default N2YO category id (overridable from the setup portal). Avoid 0
+ *  (= all): it returns hundreds of objects, far more JSON than the ESP32 can
+ *  parse. 1 = brightest/visible is a good, small default. */
+constexpr int kSatCategory = 1;
+/** Only plot satellites at or above this elevation above the horizon (deg). */
+constexpr float kSatMinElevationDeg = 0.0f;
+
+/** Curated N2YO categories offered in the setup portal (id + label). 0 (= all)
+ *  is deliberately omitted: its response is too large for the ESP32. */
+struct SatCategory {
+  int id;
+  const char* name;
+};
+constexpr SatCategory kSatCategories[] = {
+  {1, "Brightest"},
+  {2, "ISS"},
+  {18, "Amateur radio"},
+  {52, "Starlink"},
+  {53, "OneWeb"},
+  {20, "GPS"},
+  {22, "Galileo"},
+  {15, "Iridium"},
+  {3, "Weather"},
+  {4, "NOAA"},
+  {32, "CubeSats"},
+  {26, "Science"},
+};
+constexpr size_t kSatCategoryCount =
+    sizeof(kSatCategories) / sizeof(kSatCategories[0]);
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

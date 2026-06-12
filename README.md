@@ -12,17 +12,21 @@ Firmware for the **Waveshare ESP32-S3 Touch LCD 1.28** (round GC9A01 display, 24
 
 Changes from the upstream project:
 
+- **Satellite radar** - a second radar showing satellites currently overhead as a sky plot (zenith at the centre, horizon at the rim), with each satellite drawn as a triangle pointing in its direction of travel. Live positions come from the free [N2YO](https://www.n2yo.com/api/) *above* API
+- **Tap to cycle views** - a single tap on the touch screen cycles **Plane radar → Satellite radar → IP address**, and each view stays until the next tap
 - **UK postcode → coordinates** - enter a UK postcode in the web settings and it's geocoded to lat/lon via [postcodes.io](https://postcodes.io) (no API key)
-- **Web settings page** - adjust location, range, miles/km, and **top bearing** (display rotation) from a browser at `plane-radar.local`, no reflash needed
+- **Web settings page** - adjust location, range, miles/km, **top bearing** (display rotation), and the **N2YO API key / satellite category** from a browser at `plane-radar.local`, no reflash needed
 - **UK airport overlays** - nearby UK airports drawn on the radar grid
 - **Slimmed firmware** - removed the bundled large-airports dataset and runway-overlay feature
 
 ## What it does
 
 1. **Wi‑Fi setup** (if needed) - captive portal on AP **`PlaneRadar-Setup`**
-2. **Radar** - live aircraft from [adsb.fi](https://opendata.adsb.fi/) on a sonar-style grid
+2. **Plane radar** - live aircraft from [adsb.fi](https://opendata.adsb.fi/) on a sonar-style grid
+3. **Satellite radar** - satellites overhead from [N2YO](https://www.n2yo.com/api/) on a sky plot (needs a free API key)
+4. **IP address** - the device IP, handy for reaching the web settings page
 
-After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
+After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~3 s). **Tap** the screen to cycle between the three views.
 
 ## Assembly hardware
 
@@ -31,7 +35,17 @@ To assemble the 3D printed case you'll need:
 - **4 × M1.6 × 10 mm** screws
 - **4 × M1.6** nuts
 
-## Controls (BOOT, GPIO 0, active LOW)
+## Controls
+
+**Touch screen** (CST816S capacitive):
+
+| Action | Effect |
+|--------|--------|
+| **Tap** | Cycle view: Plane radar → Satellite radar → IP address |
+
+The view stays put until the next tap. Idle reads are gated on the touch INT line, so the panel can sleep and the I2C bus stays quiet when you're not touching it.
+
+**BOOT button** (GPIO 0, active LOW):
 
 | Action | Effect |
 |--------|--------|
@@ -54,6 +68,9 @@ mDNS hostname is configured in `config.h` as `kPortalHostname` (`plane-radar` �
 |-------|---------|
 | **Latitude / Longitude** | Radar center and ADS-B query position (defaults in `config.h` until set) |
 | **Display distances in miles** | Ring scale label in **mi** instead of **km** (e.g. `6mi` vs `10km`) |
+| **Top bearing** | Rotates the display so a chosen compass bearing points up |
+| **N2YO API key** | Enables the satellite radar (free key from [n2yo.com/api](https://www.n2yo.com/api/)) |
+| **Satellite category** | Which N2YO group to show (Brightest, ISS, Starlink, GPS, …) |
 
 After a reset, the device reboots and shows the setup screen immediately (no “Connecting” loop on stale credentials).
 
@@ -93,6 +110,24 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 - Poll interval: `kAdsbFetchIntervalMs` (5 s) in `config.h`
 - Ground aircraft hidden by default (`kAdsbShowGroundAircraft`)
 
+## Satellite radar
+
+Tap the screen until you reach the **satellite** view. It's a sky plot:
+
+- **Centre = zenith** (straight up), **outer ring = horizon**; rings mark 30° / 60° elevation
+- Blue crosshairs and elevation rings; white **N / E / S / W** at the rim
+- Each satellite is a triangle pointing in its **direction of travel**, with a name label on the highest few
+
+### Setup
+
+1. Get a free API key at **[n2yo.com/api](https://www.n2yo.com/api/)** (registration only; ~1000 requests/hour)
+2. Open **`plane-radar.local`**, paste the key into **N2YO API key**, pick a **Satellite category**, and Save
+3. Tap to the satellite view - it polls N2YO every ~15 s
+
+Until a key is set, the satellite view shows a prompt. Direction of travel is derived from the change between two fetches, so a satellite's triangle settles onto its real heading after the second poll.
+
+> **Note:** category `0` (*all*) is intentionally not offered - its response is far too large for the ESP32. "Brightest" is the default and a good starting point; some categories (e.g. ISS) often show nothing when none of that group is above you.
+
 ## Configuration
 
 Edit **`include/config.h`** for hardware and behavior:
@@ -102,9 +137,11 @@ Edit **`include/config.h`** for hardware and behavior:
 | Portal | `kPortalApName`, `kPortalIp`, `kPortalHostname` / `kPortalHostUrl` (mDNS; needs `-DWM_MDNS` in `platformio.ini`) |
 | Wi‑Fi timing | connect attempts, reconnect grace, portal timeout (`0` = no timeout) |
 | BOOT | `kBootPin`, `kBootResetHoldMs`, `kBootTapMinMs` |
+| Touch (CST816S) | `kTouchPinSda/Scl/Int/Rst`, `kTouchI2cAddr` |
 | Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
 | Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
 | ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
+| Satellites | `kSatCategory` (default), `kSatCategories[]`, `kSatSearchRadiusDeg`, `kSatFetchIntervalMs` |
 
 Range presets: `include/ui/radar_range.h` (`kRangePresets`).
 
@@ -151,13 +188,26 @@ src/
 ## Build
 
 ```bash
-pio run -t upload
+pio run -e supermini -t upload    # ESP32-C3 Super Mini + round GC9A01
 pio device monitor
 ```
 
 - PlatformIO env: **`supermini`**
 - Serial: **115200** baud
 - USB CDC on boot enabled in `platformio.ini` for the Super Mini
+
+### Alternate board: Waveshare ESP32-S3-Touch-LCD-4.3B
+
+A second build target drives a [Waveshare ESP32-S3-Touch-LCD-4.3B](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4.3B) (800×480 RGB-parallel LCD, GT911 touch, CH422G IO expander). The round-display build is unchanged.
+
+```bash
+pio run -e waveshare43b -t upload
+```
+
+- Layout: the radar circle fills a ~400×400 region on the left; the right side is a **live traffic list** (callsign · type · altitude · distance, nearest first).
+- Touch: tap anywhere shows the device IP for 5 s (same as the round build). The **BOOT** button cycles range presets.
+- Requires the N16R8 module (16 MB flash / 8 MB PSRAM); the RGB framebuffer and background sprite live in PSRAM.
+- If the screen is blank or garbled on first flash, the likely culprits are commented in `include/hardware/lgfx_config.hpp` (RGB `freq_write`), `include/config.h` (CH422G EXIO bit map, GT911 address `0x14`/`0x5D`).
 
 ### Web-flashable release image
 
